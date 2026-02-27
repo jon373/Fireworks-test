@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Fireworks</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            background: #03020c;
+            min-height: 100vh;
+            touch-action: manipulation;
+        }
+        .sky {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: radial-gradient(ellipse at 30% 40%, #1a1f30, #010006);
+            overflow: hidden;
+            cursor: crosshair;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+<div id="tapZone" class="sky">
+    <canvas id="fireCanvas"></canvas>
+</div>
+
+<script>
+(function() {
+    const zone = document.getElementById('tapZone');
+    const canvas = document.getElementById('fireCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // ---------- resize ----------
+    function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // ---------- stars background (deep night) ----------
+    const stars = [];
+    const STARS_COUNT = 200;
+    for (let i = 0; i < STARS_COUNT; i++) {
+        stars.push({
+            x: Math.random(),
+            y: Math.random(),
+            size: Math.random() * 2.2 + 0.8,
+            brightness: Math.random() * 0.6 + 0.3,
+        });
+    }
+
+    // ---------- animation arrays ----------
+    let rockets = [];        
+    let particles = [];
+
+    // ---------- state ----------
+    let started = false;
+    let continuousMode = false;      // after the BIG slow bloom, normal rapid bursts
+    let showText = false;
+    let secondRocketLaunched = false; 
+
+    // helpers
+    const rand = (min, max) => Math.random() * (max - min) + min;
+
+    // ----- launch the ONE rocket (straight up, no fall) -----
+    function launchSingleRocket(xPos, targetYFactor = 0.3) {
+        rockets = []; // clear any existing
+        rockets.push({
+            x: xPos,
+            y: canvas.height,
+            vx: 0,
+            vy: -2.1,                       // slow ascent ~5 sec
+            targetY: canvas.height * targetYFactor,
+            size: 5,
+            color: `hsl(${rand(35, 55)}, 95%, 72%)`,
+            trail: []
+        });
+    }
+
+    // ----- slow bloom explosion (first firework) -----
+    // instead of many particles at once, we generate them with a delay spread
+    function slowBloomExplode(x, y) {
+        const totalParticles = 280; // rich, dense bloom
+        const delayBetween = 12;     // milliseconds between each particle spawn
+        const bloomDuration = 800;   // total spread over ~0.8 sec
+
+        for (let i = 0; i < totalParticles; i++) {
+            const angle = rand(0, Math.PI * 2);
+            const speed = rand(2.5, 7);  // varied speeds create depth
+
+            // soft, warm colors for the big bloom
+            const hue = rand(20, 60); // gold/amber/orange
+            const color = `hsl(${hue}, 95%, 70%)`;
+
+            // Staggered launch using setTimeout
+            setTimeout(() => {
+                // only add if not destroyed (page still active)
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    size: rand(4, 9),
+                    life: 1,
+                    decay: rand(0.007, 0.014), // slower fade for bloom
+                    drag: 0.98,
+                    color: color,
+                    // add a tiny secondary variation
+                });
+            }, i * delayBetween / 2); // half the delayBetween makes it smoother but still "slow"
+        }
+
+        // also trigger a few extra sparkles at the end for magic
+        setTimeout(() => {
+            for (let j = 0; j < 30; j++) {
+                particles.push({
+                    x: x, y: y,
+                    vx: rand(-3, 3),
+                    vy: rand(-3, 3),
+                    size: rand(2, 5),
+                    life: 1,
+                    decay: 0.012,
+                    drag: 0.97,
+                    color: 'white',
+                });
+            }
+        }, 400);
+    }
+
+    // ----- normal rapid explosion (for continuous mode) -----
+    function rapidExplode(x, y, romantic = true) {
+        const count = romantic ? 150 : 100;
+        for (let i = 0; i < count; i++) {
+            const angle = rand(0, Math.PI * 2);
+            const speed = rand(4, 11);
+
+            let color;
+            if (romantic) {
+                const r = Math.random();
+                if (r < 0.4) color = 'hsl(340, 95%, 75%)';
+                else if (r < 0.7) color = 'hsl(55, 95%, 75%)';
+                else if (r < 0.9) color = 'hsl(200, 90%, 80%)';
+                else color = 'white';
+            } else {
+                color = `hsl(${rand(0, 360)}, 95%, 70%)`;
+            }
+
+            particles.push({
+                x, y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                size: rand(2.5, 7),
+                life: 1,
+                decay: rand(0.008, 0.018),
+                drag: 0.98,
+                color
+            });
+        }
+    }
+
+    // ---------- animation loop ----------
+    function animate() {
+        // background
+        ctx.fillStyle = '#03020c';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // stars
+        for (let s of stars) {
+            ctx.globalAlpha = s.brightness;
+            ctx.fillStyle = '#fffbe3';
+            ctx.beginPath();
+            ctx.arc(s.x * canvas.width, s.y * canvas.height, s.size, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
+
+        // fade trail
+        ctx.fillStyle = 'rgba(3, 2, 12, 0.2)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // ----- ROCKET -----
+        for (let i = rockets.length - 1; i >= 0; i--) {
+            const r = rockets[i];
+
+            if (!r.trail) r.trail = [];
+            r.trail.push({ x: r.x, y: r.y });
+            if (r.trail.length > 6) r.trail.shift();
+
+            r.y += r.vy;   // upward
+
+            // explosion condition
+            if (r.y <= r.targetY) {
+                // This is the FIRST explosion (big bloom)
+                if (!continuousMode) {
+                    slowBloomExplode(r.x, r.y);
+                    // after bloom finishes starting, enable continuous mode (after ~1 sec)
+                    setTimeout(() => {
+                        continuousMode = true;
+                    }, 900);
+                } else {
+                    // second rocket explosion (rapid romantic)
+                    rapidExplode(r.x, r.y, true);
+                }
+
+                rockets.splice(i, 1);
+                continue;
+            }
+
+            // draw rocket
+            for (let j = 0; j < r.trail.length; j++) {
+                const t = r.trail[j];
+                ctx.globalAlpha = 0.3 + j * 0.1;
+                ctx.shadowBlur = 18;
+                ctx.shadowColor = '#fff9cf';
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, r.size * 0.5 * (j / r.trail.length + 0.4), 0, 2 * Math.PI);
+                ctx.fillStyle = r.color;
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+            ctx.shadowBlur = 30;
+            ctx.beginPath();
+            ctx.arc(r.x, r.y, r.size, 0, 2 * Math.PI);
+            ctx.fillStyle = r.color;
+            ctx.fill();
+        }
+
+        // ----- FIREWORKS particles (both slow bloom and rapid) -----
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vy += 0.02;
+            p.vx *= p.drag;
+            p.vy *= p.drag;
+            p.life -= p.decay;
+
+            if (p.life <= 0.02 || p.y > canvas.height + 50) {
+                particles.splice(i, 1);
+                continue;
+            }
+
+            ctx.globalAlpha = p.life * 0.9;
+            ctx.shadowBlur = 22;
+            ctx.shadowColor = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * p.life * 1.2, 0, 2 * Math.PI);
+            ctx.fillStyle = p.color;
+            ctx.fill();
+        }
+
+        // ----- CONTINUOUS MODE: rapid random bursts (romantic) -----
+        if (continuousMode && !showText) {
+            if (Math.random() < 0.07) {
+                rapidExplode(
+                    rand(canvas.width * 0.2, canvas.width * 0.8),
+                    rand(canvas.height * 0.2, canvas.height * 0.7),
+                    true
+                );
+            }
+        } else if (continuousMode && showText) {
+            if (Math.random() < 0.04) {
+                rapidExplode(
+                    rand(canvas.width * 0.2, canvas.width * 0.8),
+                    rand(canvas.height * 0.2, canvas.height * 0.6),
+                    true
+                );
+            }
+        }
+
+        // ----- "I MISS YOU" text -----
+        if (showText) {
+            ctx.save();
+            ctx.shadowColor = '#ffb3d9';
+            ctx.shadowBlur = 45;
+            ctx.font = 'bold 70px "Segoe UI", "Arial", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const grad = ctx.createLinearGradient(canvas.width/2 - 130, canvas.height*0.35 - 20, canvas.width/2 + 130, canvas.height*0.35 + 20);
+            grad.addColorStop(0, '#ffe6b0');
+            grad.addColorStop(0.6, '#ffd9e8');
+            grad.addColorStop(1, '#c6e0ff');
+            ctx.fillStyle = grad;
+
+            ctx.fillText('Moret! Lab u!', canvas.width/2, canvas.height * 0.35);
+            ctx.shadowBlur = 65;
+            ctx.globalAlpha = 0.7;
+            ctx.fillText('Moret Lab u!', canvas.width/2, canvas.height * 0.35);
+            ctx.globalAlpha = 1;
+            ctx.restore();
+
+            // floating sparkles around text
+            for (let i=0; i<6; i++) {
+                const offX = Math.sin(Date.now()*0.002 + i)*45 + Math.cos(i*2)*20;
+                const offY = Math.cos(Date.now()*0.003 + i)*30 + Math.sin(i)*25;
+                ctx.shadowBlur = 30;
+                ctx.globalAlpha = 0.5 + 0.3 * Math.sin(Date.now()*0.01 + i);
+                ctx.fillStyle = i%2 ? '#ffb3c6' : '#fff9cf';
+                ctx.beginPath();
+                ctx.arc(canvas.width/2 + offX, canvas.height*0.35 + offY - 10, 4, 0, 2*Math.PI);
+                ctx.fill();
+            }
+        }
+
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1.0;
+
+        requestAnimationFrame(animate);
+    }
+    animate();
+
+    // ---------- start sequence (clean timing) ----------
+    function startSequence() {
+        if (started) return;
+        started = true;
+
+        // FIRST ROCKET: will explode with SLOW BLOOM
+        launchSingleRocket(canvas.width * 0.5, 0.27);
+
+        // SECOND ROCKET after 10 sec
+        setTimeout(() => {
+            rockets = []; 
+            launchSingleRocket(canvas.width * 0.5, 0.25); 
+
+            // text appears after second rocket explodes (~5 sec flight)
+            setTimeout(() => {
+                showText = true;
+                // extra romantic bursts at text center
+                rapidExplode(canvas.width/2, canvas.height * 0.35, true);
+                rapidExplode(canvas.width/2 - 30, canvas.height * 0.35 - 20, true);
+            }, 4800); 
+
+        }, 10000); 
+    }
+
+    zone.addEventListener('click', startSequence);
+    zone.addEventListener('touchstart', startSequence, { passive: false });
+
+})();
+</script>
+</body>
+</html>
